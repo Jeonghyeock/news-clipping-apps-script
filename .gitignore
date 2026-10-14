@@ -1,0 +1,4 @@
+node_modules/
+news.json
+.env
+*.log

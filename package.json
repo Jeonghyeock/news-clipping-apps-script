@@ -1,0 +1,19 @@
+{
+  "name": "news-clipping-apps-script",
+  "version": "1.0.0",
+  "description": "구글 시트 + Apps Script 기반 회사 언론 보도 자동 수집 — 구글·네이버 뉴스 크롤링, Claude 웹 검색 AI 검증, 사람 승인 후 홈페이지 반영",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "author": "Jeonghyeock Kim",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test \"test/*.test.mjs\"",
+    "fetch-news": "node site/fetch-approved-news.mjs"
+  },
+  "dependencies": {
+    "google-auth-library": "^11.3.0"
+  }
+}
