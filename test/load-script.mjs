@@ -35,10 +35,12 @@ export function loadScript({ properties = {}, responses = [], now } = {}) {
 }
 
 // getDataRange / getRange / sort 만 흉내 내는 가짜 시트. rows[0] 이 열 이름 행이다.
+// setNumberFormat 은 값을 바꾸지 않고, 어느 범위에 어떤 서식을 걸었는지만 numberFormats 에 남긴다.
 export class FakeSheet {
   constructor(rows) {
     this.rows = rows.map((r) => [...r]);
     this.sorted = false;
+    this.numberFormats = [];
   }
   getDataRange() {
     return { getValues: () => this.rows.map((r) => [...r]) };
@@ -60,6 +62,9 @@ export class FakeSheet {
       },
       setValue(value) {
         sheet.rows[row - 1][col - 1] = value;
+      },
+      setNumberFormat(format) {
+        sheet.numberFormats.push({ row, col, numRows, numCols, format });
       },
       sort({ column, ascending }) {
         const body = sheet.rows.slice(row - 1, row - 1 + numRows);

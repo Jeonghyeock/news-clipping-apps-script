@@ -42,13 +42,20 @@ export function toNewsItems(rows, { fallbackImage } = {}) {
     .map((r) => ({
       title: r.title,
       media: r.media,
-      date: r.date,
+      date: normalizeDate(r.date),
       url: r.url,
       image: r.image || fallbackImage || undefined,
       description: r.description || undefined,
     }))
     .filter((item) => item.title && item.url)
     .sort((a, b) => String(b.date ?? '').localeCompare(String(a.date ?? '')));
+}
+
+// 날짜 칸이 시트에서 날짜 값으로 바뀌어 있으면 표시된 글자가 "2025. 3. 2" 처럼 온다(한국어 로캘).
+// 문자열로 정렬하므로 "YYYY.MM.DD" 로 맞춘다. 알아볼 수 없는 값은 그대로 둔다.
+export function normalizeDate(value) {
+  const m = String(value ?? '').match(/^\s*(\d{4})\s*\.\s*(\d{1,2})\s*\.\s*(\d{1,2})\s*\.?\s*$/);
+  return m ? `${m[1]}.${m[2].padStart(2, '0')}.${m[3].padStart(2, '0')}` : value;
 }
 
 async function main() {

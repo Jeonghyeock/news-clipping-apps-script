@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { toNewsItems, toObjects } from '../site/fetch-approved-news.mjs';
+import { normalizeDate, toNewsItems, toObjects } from '../site/fetch-approved-news.mjs';
 
 describe('fetch-approved-news', () => {
   test('1행을 열 이름으로 써서 행을 객체로 바꾸고, 빈 칸은 빈 문자열로 채운다', () => {
@@ -35,6 +35,24 @@ describe('fetch-approved-news', () => {
     assert.equal(items[0].image, 'https://img/3');
     assert.equal(items[1].image, '/logo.png');
     assert.equal(items[1].description, undefined);
+  });
+
+  test('날짜가 "2025. 3. 2" 처럼 읽혀도 YYYY.MM.DD 로 맞춘 뒤 최신순으로 정렬한다', () => {
+    assert.equal(normalizeDate('2025. 3. 2'), '2025.03.02');
+    assert.equal(normalizeDate('2025. 3. 2.'), '2025.03.02');
+    assert.equal(normalizeDate('2025.03.02'), '2025.03.02');
+    assert.equal(normalizeDate(''), '');
+    assert.equal(normalizeDate('3월 초'), '3월 초'); // 알아볼 수 없으면 그대로
+
+    const items = toNewsItems([
+      { status: 'approved', title: '3월 9일', url: 'https://a/1', date: '2025.03.09' },
+      { status: 'approved', title: '12월 1일', url: 'https://a/2', date: '2025. 12. 1' },
+      { status: 'approved', title: '3월 10일', url: 'https://a/3', date: '2025. 3. 10' },
+    ]);
+    assert.deepEqual(
+      items.map((i) => [i.title, i.date]),
+      [['12월 1일', '2025.12.01'], ['3월 10일', '2025.03.10'], ['3월 9일', '2025.03.09']],
+    );
   });
 
   test('자격 증명이 없으면 빌드를 깨지 않고 빈 목록을 쓴다', () => {

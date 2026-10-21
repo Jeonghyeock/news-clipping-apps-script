@@ -74,6 +74,22 @@ describe('crawlCore_', () => {
     assert.deepEqual(newest.slice(0, 5), ['pending', '샘플원 신제품 공개', '전자신문', '2025.04.10', 'https://news.google.com/x2']);
   });
 
+  test('새 행의 날짜 칸은 시트가 날짜 값으로 바꾸지 않게 일반 텍스트(@)로 둔다', () => {
+    const { gs } = loadScript();
+    const sheet = new FakeSheet([
+      HEADER,
+      row({ status: 'approved', title: '샘플원 예전 기사', media: '매일경제', date: '2025.01.01', url: 'https://n.example/0' }),
+    ]);
+    gs.fetchGoogleNews_ = () => [
+      { title: '샘플원 출시', url: 'https://n.example/1', media: '매일경제', date: '2025.06.01', snippet: '' },
+      { title: '샘플테크 채용', url: 'https://n.example/2', media: '전자신문', date: '2025.06.02', snippet: '' },
+    ];
+    gs.fetchNaverNews_ = () => [];
+    assert.equal(gs.crawlCore_(sheet), 2);
+    // 새로 붙는 3행부터 2줄의 date 열(4번째 열)만 — 이미 있던 행과 다른 열은 건드리지 않는다.
+    assert.deepEqual(sheet.numberFormats, [{ row: 3, col: 4, numRows: 2, numCols: 1, format: '@' }]);
+  });
+
   test('사람이 열 순서를 바꿔도 열 이름을 보고 제자리에 쓴다', () => {
     const { gs } = loadScript();
     const header = ['url', 'date', 'title', 'status', 'media', 'ai_verdict', 'ai_reason', 'memo', 'image', 'description'];
