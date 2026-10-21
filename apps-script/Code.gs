@@ -106,7 +106,13 @@ function dailyRun() {
 
 function crawlNews() {
   const ui = SpreadsheetApp.getUi();
-  const added = crawlCore_(firstSheet_());
+  let added;
+  try {
+    added = crawlCore_(firstSheet_());
+  } catch (e) {
+    ui.alert("크롤을 중단했습니다.\n\n" + e.message);
+    return;
+  }
   const pendingTotal = countPending_(firstSheet_());
   notifySlack_(
     added > 0
@@ -122,6 +128,9 @@ function crawlNews() {
 function crawlCore_(sheet) {
   const data = sheet.getDataRange().getValues();
   const col = headerIndex_(data[0]);
+  // 열 이름이 틀린 채로 돌면 그 열이 빈 행이 쌓인다(url 이 없으면 중복 검사도 안 걸린다).
+  const missing = missingColumnsNote_(col);
+  if (missing) throw new Error(missing);
 
   // A row is a duplicate if its normalized title OR its URL matches an
   // existing/seen row. Title and url are stable; media is NOT part of the key
@@ -441,6 +450,9 @@ function verifyCore_(sheet) {
   if (!key) return counts;
   const data = sheet.getDataRange().getValues();
   const col = headerIndex_(data[0]);
+  // 결과를 쓸 열이 없으면 API 를 부르기 전에 멈춘다. 알림은 verifyPending·dailyRun 이 counts.error 로 한다.
+  counts.error = missingColumnsNote_(col);
+  if (counts.error) return counts;
 
   // Only verify pending rows that aren't verified yet (empty ai_verdict), so
   // we don't re-spend on / overwrite already-verified rows. To re-verify a row,
@@ -716,6 +728,16 @@ function headerIndex_(headerRow) {
   const col = {};
   headerRow.forEach((h, i) => (col[String(h).trim()] = i));
   return col;
+}
+
+// 1행에 COLUMNS 가 다 있는지 본다. 열 이름에 오타가 있으면(예: "ai verdict") 그 열은 col 에 없어
+// setCell_ 이 조용히 건너뛴다 — ai_verdict 가 계속 비어 같은 행이 매 실행마다 다시 뽑힌다.
+// 빠진 열이 있으면 그 이름을 담은 안내문을, 다 있으면 빈 문자열을 돌려준다.
+function missingColumnsNote_(col) {
+  const missing = COLUMNS.filter((name) => col[name] === undefined);
+  return missing.length
+    ? "시트 1행에 필수 열이 없습니다: " + missing.join(", ") + " (열 이름의 오타·띄어쓰기를 확인해주세요)"
+    : "";
 }
 
 function countPending_(sheet) {

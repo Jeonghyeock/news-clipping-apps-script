@@ -76,12 +76,32 @@ describe('crawlCore_', () => {
 
   test('사람이 열 순서를 바꿔도 열 이름을 보고 제자리에 쓴다', () => {
     const { gs } = loadScript();
-    const header = ['url', 'date', 'title', 'status', 'media', 'ai_verdict', 'ai_reason', 'memo'];
+    const header = ['url', 'date', 'title', 'status', 'media', 'ai_verdict', 'ai_reason', 'memo', 'image', 'description'];
     const sheet = new FakeSheet([header]);
     gs.fetchGoogleNews_ = () => [{ title: '샘플원 출시', url: 'https://n.example/1', media: '매일경제', date: '2025.06.01', snippet: '' }];
     gs.fetchNaverNews_ = () => [];
     gs.crawlCore_(sheet);
-    assert.deepEqual(sheet.rows[1], ['https://n.example/1', '2025.06.01', '샘플원 출시', 'pending', '매일경제', '', '', '']);
+    assert.deepEqual(sheet.rows[1], ['https://n.example/1', '2025.06.01', '샘플원 출시', 'pending', '매일경제', '', '', '', '', '']);
+  });
+
+  test('1행 열 이름에 오타가 있으면 검색하기 전에 빠진 열 이름을 알리며 멈춘다 (메뉴 실행이면 창으로)', () => {
+    const { gs } = loadScript();
+    const header = HEADER.map((h) => (h === 'url' ? 'URL ' : h));
+    const sheet = new FakeSheet([header]);
+    let searched = 0;
+    gs.fetchGoogleNews_ = () => (searched++, []);
+    gs.fetchNaverNews_ = () => (searched++, []);
+    assert.throws(() => gs.crawlCore_(sheet), /필수 열이 없습니다: url/);
+
+    const alerts = [];
+    gs.SpreadsheetApp = {
+      getUi: () => ({ alert: (message) => alerts.push(message) }),
+      getActiveSpreadsheet: () => ({ getSheets: () => [sheet] }),
+    };
+    gs.crawlNews();
+    assert.match(alerts[0], /^크롤을 중단했습니다\.\n\n시트 1행에 필수 열이 없습니다: url/);
+    assert.equal(searched, 0);
+    assert.equal(sheet.rows.length, 1);
   });
 });
 
@@ -221,6 +241,21 @@ describe('verifyCore_', () => {
     const counts = gs.verifyCore_(sheet);
     assert.equal(requests.length, 6);
     assert.equal(counts.remaining, 2);
+  });
+
+  test('1행 열 이름에 오타가 있으면 API 를 부르지 않고 빠진 열 이름을 오류로 돌려준다', () => {
+    // ai_verdict 가 없으면 결과를 못 써서 같은 행을 매 실행마다 다시 검증(과금)하게 된다.
+    const header = HEADER.map((h) => (h === 'ai_verdict' ? 'ai verdict' : h));
+    const sheet = new FakeSheet([header, pending('A')]);
+    const { gs, requests } = loadScript({
+      properties: { ANTHROPIC_API_KEY: KEY },
+      responses: [answer({ ours: true, verdict: 'approve', reason: '우리 기사' })],
+    });
+    const counts = gs.verifyCore_(sheet);
+    assert.equal(requests.length, 0);
+    assert.match(counts.error, /필수 열이 없습니다: ai_verdict/);
+    assert.equal(counts.done, 0);
+    assert.deepEqual(sheet.rows[1], pending('A'));
   });
 
   test('API 키가 없으면 아무 요청도 보내지 않는다', () => {
