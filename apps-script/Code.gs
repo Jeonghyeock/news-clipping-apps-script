@@ -183,8 +183,12 @@ function crawlCore_(sheet) {
       put("url", it.url);
       return row;
     });
+    const first = sheet.getLastRow() + 1;
+    // "2025.03.02" 를 그대로 넣으면 한국어 로캘 시트가 날짜 값으로 바꿀 수 있다. 그러면 날짜순 정렬과
+    // 홈페이지(표시된 글자 "2025. 3. 2" 를 문자열로 정렬)가 어긋나므로, 새 행의 날짜 칸을 먼저 일반 텍스트로 둔다.
+    if (col.date !== undefined) sheet.getRange(first, col.date + 1, rows.length, 1).setNumberFormat("@");
     sheet
-      .getRange(sheet.getLastRow() + 1, 1, rows.length, width)
+      .getRange(first, 1, rows.length, width)
       .setValues(rows);
     sortByDateDesc_(sheet, col);
   }
