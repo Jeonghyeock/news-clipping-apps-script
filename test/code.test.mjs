@@ -8,6 +8,16 @@ const answer = (obj, extra = {}) => ({
 });
 const article = { title: '샘플테크 투자 유치', media: '조선비즈', date: '2025.03.02', url: 'https://news.google.com/x' };
 
+// 메뉴·트리거 함수가 쓰는 SpreadsheetApp 을 가짜로 넣는다. 띄운 창의 문구는 alerts 에 남는다.
+function fakeSpreadsheet(gs, sheet) {
+  const alerts = [];
+  gs.SpreadsheetApp = {
+    getUi: () => ({ alert: (message) => alerts.push(message) }),
+    getActiveSpreadsheet: () => ({ getSheets: () => [sheet], getUrl: () => 'https://sheet.example' }),
+  };
+  return alerts;
+}
+
 describe('후보 정리 도우미', () => {
   const { gs } = loadScript();
 
@@ -344,5 +354,85 @@ describe('verifyCore_', () => {
     const { gs, requests } = loadScript();
     assert.equal(gs.verifyCore_(sheet).done, 0);
     assert.equal(requests.length, 0);
+  });
+
+  // API 를 부르는 사이 사람이 행을 지우는 상황을 흉내 낸다.
+  const deleteRowDuringFetch = (gs, sheet, index) => {
+    const fetch = gs.UrlFetchApp.fetch;
+    gs.UrlFetchApp.fetch = (...args) => {
+      sheet.rows.splice(index, 1);
+      return fetch(...args);
+    };
+  };
+  const found = answer({ ours: true, verdict: 'approve', reason: '우리 기사', url: 'https://real.example/p1', media: '조선비즈' });
+
+  test('검증하는 사이 위쪽 행이 지워져 행이 옮겨져도 결과는 그 기사에 쓰고, 다른 기사는 건드리지 않는다', () => {
+    const approved = row({ status: 'approved', title: '게시된 기사', media: '한국경제', date: '2025.03.01', url: 'https://real.example/approved', ai_verdict: 'approve' });
+    const sheet = new FakeSheet([
+      HEADER,
+      row({ status: 'rejected', title: '거절한 기사', date: '2025.03.05', url: 'https://x.example/0', ai_verdict: 'reject' }),
+      pending('P1'),
+      approved,
+    ]);
+    const { gs } = loadScript({ properties: { ANTHROPIC_API_KEY: KEY }, responses: [found] });
+    deleteRowDuringFetch(gs, sheet, 1);
+
+    const counts = gs.verifyCore_(sheet);
+    assert.equal(counts.done, 1);
+    const [, p1, other] = sheet.rows;
+    assert.deepEqual([p1[1], p1[2], p1[4], p1[7]], ['P1', '조선비즈', 'https://real.example/p1', 'approve']);
+    assert.deepEqual(other, approved);
+  });
+
+  test('검증하는 사이 그 기사 행이 지워졌으면 아무 데도 쓰지 않고 건너뛴 것으로 센다', () => {
+    const approved = row({ status: 'approved', title: '게시된 기사', media: '한국경제', date: '2025.03.01', url: 'https://real.example/approved', ai_verdict: 'approve' });
+    const sheet = new FakeSheet([HEADER, pending('P1'), approved]);
+    const { gs } = loadScript({ properties: { ANTHROPIC_API_KEY: KEY }, responses: [found] });
+    deleteRowDuringFetch(gs, sheet, 1);
+
+    const counts = gs.verifyCore_(sheet);
+    assert.deepEqual({ done: counts.done, moved: counts.moved }, { done: 0, moved: 1 });
+    assert.deepEqual(sheet.rows, [HEADER, approved]);
+    assert.match(gs.verifyIssueNote_(counts), /행이 옮겨지거나 지워져 결과를 쓰지 않은 1건/);
+  });
+});
+
+describe('메뉴·매일 실행의 잠금', () => {
+  test('다른 실행이 잠금을 쥐고 있으면 크롤·검증·매일 실행을 시작하지 않고 알린다', () => {
+    const sheet = new FakeSheet([HEADER, row({ status: 'pending', title: 'A', url: 'https://n.example/a' })]);
+    const { gs, requests, lock } = loadScript({ properties: { ANTHROPIC_API_KEY: KEY } });
+    lock.held = true;
+    const alerts = fakeSpreadsheet(gs, sheet);
+    const slack = [];
+    gs.notifySlack_ = (text) => slack.push(text);
+    gs.fetchGoogleNews_ = () => assert.fail('크롤하면 안 된다');
+    gs.fetchNaverNews_ = () => assert.fail('크롤하면 안 된다');
+
+    gs.crawlNews();
+    gs.verifyPending();
+    gs.dailyRun();
+    assert.equal(alerts.length, 2);
+    for (const message of alerts) assert.match(message, /다른 실행.*아직 돌고 있어 이번 실행은 건너뜁니다/);
+    assert.equal(slack.length, 1);
+    assert.match(slack[0], /^:warning: 뉴스 자동 실행 — 다른 실행/);
+    assert.equal(requests.length, 0);
+    assert.equal(sheet.rows.length, 2);
+  });
+
+  test('실행이 끝나면, 오류로 끝나도 잠금을 푼다', () => {
+    const sheet = new FakeSheet([HEADER]);
+    const { gs, lock } = loadScript();
+    fakeSpreadsheet(gs, sheet);
+    gs.fetchGoogleNews_ = () => [];
+    gs.fetchNaverNews_ = () => [];
+    gs.crawlNews();
+    assert.deepEqual({ held: lock.held, released: lock.released }, { held: false, released: 1 });
+
+    // 매일 실행은 창이 없어 오류가 그대로 실행 기록에 남는다 — 그래도 잠금은 풀려 있어야 다음 실행이 돈다.
+    gs.crawlCore_ = () => {
+      throw new Error('시트를 읽지 못함');
+    };
+    assert.throws(() => gs.dailyRun(), /시트를 읽지 못함/);
+    assert.deepEqual({ held: lock.held, released: lock.released }, { held: false, released: 2 });
   });
 });

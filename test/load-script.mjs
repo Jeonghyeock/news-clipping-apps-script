@@ -8,6 +8,16 @@ const source = readFileSync(new URL('../apps-script/Code.gs', import.meta.url), 
 
 export function loadScript({ properties = {}, responses = [], now } = {}) {
   const requests = [];
+  // 스크립트 잠금은 하나뿐이다. 테스트가 lock.held = true 로 두면 다른 실행이 쥐고 있는 것처럼 tryLock 이 실패한다.
+  const lock = {
+    held: false,
+    released: 0,
+    tryLock: () => !lock.held && (lock.held = true),
+    releaseLock: () => {
+      lock.held = false;
+      lock.released++;
+    },
+  };
   const context = vm.createContext({
     console,
     // now 를 주면 스크립트 안의 Date.now() 가 그 값을 돌려준다(실행 시간 제한 테스트용). new Date(값) 은 그대로다.
@@ -29,9 +39,10 @@ export function loadScript({ properties = {}, responses = [], now } = {}) {
         };
       },
     },
+    LockService: { getScriptLock: () => lock },
   });
   vm.runInContext(source, context);
-  return { gs: context, requests };
+  return { gs: context, requests, lock };
 }
 
 // getDataRange / getRange / sort 만 흉내 내는 가짜 시트. rows[0] 이 열 이름 행이다.

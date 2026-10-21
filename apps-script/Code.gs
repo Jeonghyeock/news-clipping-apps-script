@@ -48,6 +48,12 @@ const OLDEST_DATE = "2023.01.01";
 const USE_GOOGLE = true; // Google News RSS (no key)
 const USE_NAVER = true; // Naver News API (needs NAVER_CLIENT_ID/SECRET; skipped if absent)
 
+// 크롤·AI 검증·매일 자동 실행은 한 번에 하나만 돈다. 겹치면 한쪽이 새 행을 넣고 정렬하는 사이
+// 다른 쪽이 처음 읽은 행 번호에 결과를 써서 엉뚱한 기사를 덮어쓴다. 이만큼 기다려도 잠금을 못 얻으면 건너뛴다.
+// 창(ui.alert)은 사람이 닫을 때까지 실행을 붙잡으므로, 잠금은 시트를 읽고 쓰는 동안에만 쥔다.
+const LOCK_WAIT_MS = 10 * 1000;
+const BUSY_NOTE = "다른 실행(크롤·AI 검증·매일 자동 실행)이 아직 돌고 있어 이번 실행은 건너뜁니다. 끝난 뒤 다시 실행해주세요.";
+
 function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu("뉴스 관리")
@@ -77,10 +83,20 @@ function setupDailyTrigger() {
 // Trigger target: crawl, then verify, then one Slack summary. Runs headless.
 function dailyRun() {
   const startedAt = Date.now();
-  const sheet = firstSheet_();
-  const added = crawlCore_(sheet);
-  const counts = verifyCore_(sheet, startedAt);
-  const pendingTotal = countPending_(firstSheet_());
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(LOCK_WAIT_MS)) {
+    notifySlack_(":warning: 뉴스 자동 실행 — " + BUSY_NOTE);
+    return;
+  }
+  let added, counts, pendingTotal;
+  try {
+    const sheet = firstSheet_();
+    added = crawlCore_(sheet);
+    counts = verifyCore_(sheet, startedAt);
+    pendingTotal = countPending_(firstSheet_());
+  } finally {
+    lock.releaseLock();
+  }
   const issue = verifyIssueNote_(counts);
   notifySlack_(
     (issue ? ":warning: AI 검증 문제 — " + issue + "\n" : "") +
@@ -108,14 +124,24 @@ function dailyRun() {
 
 function crawlNews() {
   const ui = SpreadsheetApp.getUi();
-  let added;
-  try {
-    added = crawlCore_(firstSheet_());
-  } catch (e) {
-    ui.alert("크롤을 중단했습니다.\n\n" + e.message);
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(LOCK_WAIT_MS)) {
+    ui.alert(BUSY_NOTE);
     return;
   }
-  const pendingTotal = countPending_(firstSheet_());
+  let added, pendingTotal, error;
+  try {
+    added = crawlCore_(firstSheet_());
+    pendingTotal = countPending_(firstSheet_());
+  } catch (e) {
+    error = e;
+  } finally {
+    lock.releaseLock();
+  }
+  if (error) {
+    ui.alert("크롤을 중단했습니다.\n\n" + error.message);
+    return;
+  }
   notifySlack_(
     added > 0
       ? ":newspaper: 새 뉴스 후보 " + added + "건 수집 (검토 대기 총 " + pendingTotal + "건)." +
@@ -403,7 +429,17 @@ function verifyPending() {
     ui.alert("Script Properties에 ANTHROPIC_API_KEY를 먼저 넣어주세요.");
     return;
   }
-  const counts = verifyCore_(firstSheet_());
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(LOCK_WAIT_MS)) {
+    ui.alert(BUSY_NOTE);
+    return;
+  }
+  let counts;
+  try {
+    counts = verifyCore_(firstSheet_());
+  } finally {
+    lock.releaseLock();
+  }
   if (counts.error) {
     const note =
       "AI 검증을 중단했습니다.\n\n" +
@@ -417,7 +453,7 @@ function verifyPending() {
   }
   if (counts.done === 0) {
     ui.alert(
-      counts.skipped || counts.deferred
+      counts.skipped || counts.deferred || counts.moved
         ? "검증에 성공한 항목이 없습니다. " + verifyIssueNote_(counts)
         : "검증할 새 항목이 없습니다 (pending 중 미검증 건이 없음)."
     );
@@ -454,7 +490,7 @@ function verifyCore_(sheet, startedAt) {
   const key = prop_("ANTHROPIC_API_KEY");
   const counts = {
     done: 0, approve: 0, reject: 0, review: 0, remaining: 0,
-    skipped: 0, deferred: 0, deferredNote: "", error: "", timedOut: false,
+    skipped: 0, deferred: 0, deferredNote: "", error: "", timedOut: false, moved: 0,
   };
   if (!key) return counts;
   const data = sheet.getDataRange().getValues();
@@ -535,10 +571,17 @@ function verifyCore_(sheet, startedAt) {
       verdict = "reject";
       reason = "기존 게시 기사와 중복 — " + reason;
     }
+
+    // 검증하는 사이 행이 옮겨졌을 수 있다(사람이 위쪽 행을 지우거나 넣거나 정렬함).
+    // 처음 읽은 행 번호에 그대로 쓰면 다른 기사에 결과가 붙으므로, 쓰기 직전에 다시 찾는다.
+    const sheetRow = currentRow_(sheet, col, data[r], r + 1);
+    if (!sheetRow) {
+      counts.moved++;
+      continue;
+    }
     counts[verdict] = (counts[verdict] || 0) + 1;
     counts.done++;
 
-    const sheetRow = r + 1;
     setCell_(sheet, sheetRow, col.ai_verdict, verdict);
     setCell_(sheet, sheetRow, col.ai_reason, reason);
     // 모델이 리다이렉트를 풀어 준 URL 에도 추적 파라미터가 붙어 있다.
@@ -562,6 +605,10 @@ function verifyIssueNote_(counts) {
         (counts.deferredNote ? " (" + counts.deferredNote + ")" : "")
     );
   if (counts.skipped) parts.push("응답을 읽지 못해 건너뛴 " + counts.skipped + "건은 다음 실행 때 재시도합니다");
+  if (counts.moved)
+    parts.push(
+      "검증하는 사이 행이 옮겨지거나 지워져 결과를 쓰지 않은 " + counts.moved + "건은 (행이 남아 있으면) 다음 실행 때 재시도합니다"
+    );
   return parts.join(" / ");
 }
 
@@ -779,6 +826,22 @@ function prop_(name) {
 function setCell_(sheet, rowNum, colIndex, value) {
   if (colIndex === undefined) return;
   sheet.getRange(rowNum, colIndex + 1).setValue(value);
+}
+
+// 처음 읽은 행(before)이 지금 몇 번째 행인지 찾는다. 원래 자리(expected)에 url·title 이 같은 행이
+// 그대로 있으면 그 번호를, 옮겨졌으면 url(비어 있으면 title)이 같은 행을 찾아 그 번호를 돌려준다.
+// 못 찾거나(지워짐) 여러 개면 0 — 엉뚱한 행에 쓰느니 쓰지 않고 다음 실행에 맡긴다.
+function currentRow_(sheet, col, before, expected) {
+  const data = sheet.getDataRange().getValues();
+  const same = (values, name) => String(values[col[name]]) === String(before[col[name]]);
+  const at = data[expected - 1];
+  if (at && same(at, "url") && same(at, "title")) return expected;
+  const key = String(before[col.url] || "") ? "url" : "title";
+  const found = [];
+  for (let r = 1; r < data.length; r++) {
+    if (same(data[r], key)) found.push(r + 1);
+  }
+  return found.length === 1 ? found[0] : 0;
 }
 
 // " 시트에서 확정해주세요: <시트 주소>" — empty string when nothing is pending.
