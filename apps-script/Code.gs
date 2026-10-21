@@ -7,11 +7,11 @@
  *   • 매일 자동 실행 설정  — 매일 아침 크롤 → AI 검증 → Slack 요약을 도는 트리거 설치
  *   • 사이트 반영         — 배포 훅을 불러 홈페이지를 다시 빌드 (승인된 행이 반영됨)
  *
- * 세팅 방법은 README.md 를 본다. 우리 회사에 맞게 고칠 곳은 아래 "설정" 블록뿐이다.
+ * 세팅 방법은 docs/SETUP.md 를 본다. 우리 회사에 맞게 고칠 곳은 아래 "설정" 블록뿐이다.
  * 비밀값(API 키, 웹훅 주소)은 코드에 쓰지 않고 Script Properties 에 넣는다.
  */
 
-// 다른 모델로 바꿀 때는 README 의 "모델 바꾸기"를 먼저 본다(thinking 이 켜지는 모델은 VERIFY_MAX_TOKENS 를 올려야 한다).
+// 다른 모델로 바꿀 때는 docs/SETUP.md 의 "모델 바꾸기"를 먼저 본다(thinking 이 켜지는 모델은 VERIFY_MAX_TOKENS 를 올려야 한다).
 const MODEL = "claude-opus-4-8";
 const MAX_VERIFY_PER_RUN = 6; // cap AI calls per run (Apps Script ~6-min limit)
 const VERIFY_TIME_LIMIT_MS = 4.5 * 60 * 1000; // 실행이 이만큼 지나면 새 행을 시작하지 않는다 (한 행이 1분 넘게 걸리기도 한다)
