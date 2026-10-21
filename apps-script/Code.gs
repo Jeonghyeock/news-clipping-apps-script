@@ -14,6 +14,7 @@
 // 다른 모델로 바꿀 때는 README 의 "모델 바꾸기"를 먼저 본다(thinking 이 켜지는 모델은 VERIFY_MAX_TOKENS 를 올려야 한다).
 const MODEL = "claude-opus-4-8";
 const MAX_VERIFY_PER_RUN = 6; // cap AI calls per run (Apps Script ~6-min limit)
+const VERIFY_TIME_LIMIT_MS = 4.5 * 60 * 1000; // 실행이 이만큼 지나면 새 행을 시작하지 않는다 (한 행이 1분 넘게 걸리기도 한다)
 const VERIFY_MAX_TOKENS = 2048; // 한 행을 검증하는 응답의 출력 한도
 const MAX_VERIFY_TURNS = 4; // web 검색이 pause_turn 으로 끊길 때 이어서 보낼 최대 턴 수
 // 시트에 있어야 하는 열 이름. 순서는 시트의 1행이 정하므로 여기 순서에 의존하지 않는다
@@ -75,9 +76,10 @@ function setupDailyTrigger() {
 
 // Trigger target: crawl, then verify, then one Slack summary. Runs headless.
 function dailyRun() {
+  const startedAt = Date.now();
   const sheet = firstSheet_();
   const added = crawlCore_(sheet);
-  const counts = verifyCore_(sheet);
+  const counts = verifyCore_(sheet, startedAt);
   const pendingTotal = countPending_(firstSheet_());
   const issue = verifyIssueNote_(counts);
   notifySlack_(
@@ -428,9 +430,10 @@ function verifyPending() {
     counts.review +
     ")" +
     (counts.remaining
-      ? ". 실행 시간 제한(약 6분)으로 한 번에 최대 " +
-        MAX_VERIFY_PER_RUN +
-        "건만 검증합니다 — 남은 " +
+      ? (counts.timedOut
+          ? ". 실행 시간 제한(약 6분)에 가까워져 중간에 멈췄습니다"
+          : ". 실행 시간 제한(약 6분)으로 한 번에 최대 " + MAX_VERIFY_PER_RUN + "건만 검증합니다") +
+        " — 남은 " +
         counts.remaining +
         "건은 다시 실행해주세요."
       : "");
@@ -441,11 +444,13 @@ function verifyPending() {
 }
 
 // Verify up to MAX_VERIFY_PER_RUN pending rows. Returns counts. No Slack.
-function verifyCore_(sheet) {
+// startedAt 은 이번 실행이 시작된 시각이다. 매일 실행은 크롤에 쓴 시간도 6분 제한에 들어가서 넘겨준다.
+function verifyCore_(sheet, startedAt) {
+  const started = startedAt || Date.now();
   const key = prop_("ANTHROPIC_API_KEY");
   const counts = {
     done: 0, approve: 0, reject: 0, review: 0, remaining: 0,
-    skipped: 0, deferred: 0, deferredNote: "", error: "",
+    skipped: 0, deferred: 0, deferredNote: "", error: "", timedOut: false,
   };
   if (!key) return counts;
   const data = sheet.getDataRange().getValues();
@@ -479,6 +484,12 @@ function verifyCore_(sheet) {
   }
 
   for (let i = 0; i < rows.length; i++) {
+    // 약 6분을 넘으면 Apps Script 가 실행을 강제로 끊어 Slack 요약도 가지 않는다.
+    // 시간이 얼마 안 남았으면 새 행을 시작하지 않고 남은 행은 다음 실행으로 넘긴다.
+    if (Date.now() - started > VERIFY_TIME_LIMIT_MS) {
+      counts.timedOut = true;
+      break;
+    }
     const r = rows[i];
     const result = verifyOne_(
       key,
@@ -560,21 +571,28 @@ function verifyOne_(key, row, published) {
   let paused = false;
 
   for (let turn = 0; turn < MAX_VERIFY_TURNS; turn++) {
-    const res = UrlFetchApp.fetch("https://api.anthropic.com/v1/messages", {
-      method: "post",
-      contentType: "application/json",
-      headers: { "x-api-key": key, "anthropic-version": "2023-06-01" },
-      payload: JSON.stringify({
-        model: MODEL,
-        max_tokens: VERIFY_MAX_TOKENS,
-        tools: [
-          { type: "web_search_20260209", name: "web_search", max_uses: 3 },
-          { type: "web_fetch_20260209", name: "web_fetch", max_uses: 2 },
-        ],
-        messages: messages,
-      }),
-      muteHttpExceptions: true,
-    });
+    // muteHttpExceptions 는 HTTP 상태 오류만 막는다. DNS 실패·시간 초과는 예외로 나오는데,
+    // 밖으로 나가면 실행 전체가 죽어 남은 행도, Slack 요약도 없다. 429·5xx 처럼 이 행만 미룬다.
+    let res;
+    try {
+      res = UrlFetchApp.fetch("https://api.anthropic.com/v1/messages", {
+        method: "post",
+        contentType: "application/json",
+        headers: { "x-api-key": key, "anthropic-version": "2023-06-01" },
+        payload: JSON.stringify({
+          model: MODEL,
+          max_tokens: VERIFY_MAX_TOKENS,
+          tools: [
+            { type: "web_search_20260209", name: "web_search", max_uses: 3 },
+            { type: "web_fetch_20260209", name: "web_fetch", max_uses: 2 },
+          ],
+          messages: messages,
+        }),
+        muteHttpExceptions: true,
+      });
+    } catch (err) {
+      return { error: "API 호출 실패(네트워크 오류·시간 초과) — " + err.message, retryable: true };
+    }
     const code = res.getResponseCode();
     if (code !== 200) {
       return { error: apiErrorMessage_(res), retryable: isRetryable_(code) };
