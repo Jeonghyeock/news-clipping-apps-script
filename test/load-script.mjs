@@ -6,19 +6,23 @@ import vm from 'node:vm';
 // 함수 선언은 context 의 속성이 되므로, 테스트에서 함수를 바꿔 끼울 수도 있다(fetchGoogleNews_ 등).
 const source = readFileSync(new URL('../apps-script/Code.gs', import.meta.url), 'utf8');
 
-export function loadScript({ properties = {}, responses = [] } = {}) {
+export function loadScript({ properties = {}, responses = [], now } = {}) {
   const requests = [];
   const context = vm.createContext({
     console,
+    // now 를 주면 스크립트 안의 Date.now() 가 그 값을 돌려준다(실행 시간 제한 테스트용). new Date(값) 은 그대로다.
+    ...(now && { Date: class extends Date { static now() { return now(); } } }),
     PropertiesService: {
       getScriptProperties: () => ({ getProperty: (name) => properties[name] ?? null }),
     },
     // fetch 할 때마다 responses 에서 하나씩 꺼내 준다. 보낸 요청은 requests 에 남긴다.
+    // { throws: '메시지' } 는 DNS 실패·시간 초과처럼 응답 대신 예외를 던진다.
     UrlFetchApp: {
       fetch(url, options = {}) {
         requests.push({ url, options, payload: options.payload ? JSON.parse(options.payload) : undefined });
         const next = responses.shift();
         if (!next) throw new Error(`unexpected fetch: ${url}`);
+        if (next.throws) throw new Error(next.throws);
         return {
           getResponseCode: () => next.status ?? 200,
           getContentText: () => (typeof next.body === 'string' ? next.body : JSON.stringify(next.body)),

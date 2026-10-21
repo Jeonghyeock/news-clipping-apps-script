@@ -155,6 +155,13 @@ describe('verifyOne_', () => {
     assert.match(bad.error, /400 — model: not found/);
   });
 
+  test('DNS 실패·시간 초과처럼 fetch 가 예외를 던지면 밖으로 내보내지 않고 다시 할 오류로 돌려준다', () => {
+    const { gs } = loadScript({ responses: [{ throws: 'Address unavailable: https://api.anthropic.com/v1/messages' }] });
+    const result = gs.verifyOne_(KEY, article, []);
+    assert.equal(result.retryable, true);
+    assert.match(result.error, /네트워크 오류·시간 초과\) — Address unavailable/);
+  });
+
   test('모델이 판단을 거절하면 사람이 보도록 review 로 남긴다', () => {
     const { gs } = loadScript({ responses: [{ body: { content: [], stop_reason: 'refusal' } }] });
     const result = gs.verifyOne_(KEY, article, []);
@@ -230,6 +237,64 @@ describe('verifyCore_', () => {
     const counts = gs.verifyCore_(sheet);
     assert.equal(requests.length, 1);
     assert.match(counts.error, /credit balance/);
+  });
+
+  test('네트워크 오류가 난 행만 비워 두고 다음 행을 계속 검증한다', () => {
+    const sheet = new FakeSheet([HEADER, pending('A'), pending('B')]);
+    const { gs, requests } = loadScript({
+      properties: { ANTHROPIC_API_KEY: KEY },
+      responses: [{ throws: 'Timeout: https://api.anthropic.com/v1/messages' }, answer({ ours: true, verdict: 'approve', reason: '우리 기사' })],
+    });
+    const counts = gs.verifyCore_(sheet);
+    assert.equal(requests.length, 2);
+    assert.deepEqual({ done: counts.done, deferred: counts.deferred, remaining: counts.remaining }, { done: 1, deferred: 1, remaining: 1 });
+    assert.match(counts.deferredNote, /Timeout/);
+    const [, a, b] = sheet.rows;
+    assert.equal(a[7], ''); // 다음 실행에서 다시 검증한다
+    assert.equal(b[7], 'approve');
+  });
+
+  test('매일 자동 실행은 네트워크 오류가 나도 끝까지 돌아 Slack 요약을 보낸다', () => {
+    const sheet = new FakeSheet([HEADER, pending('A')]);
+    const { gs } = loadScript({
+      properties: { ANTHROPIC_API_KEY: KEY },
+      responses: [{ throws: 'Address unavailable: https://api.anthropic.com/v1/messages' }],
+    });
+    gs.SpreadsheetApp = { getActiveSpreadsheet: () => ({ getSheets: () => [sheet], getUrl: () => 'https://sheet.example' }) };
+    gs.fetchGoogleNews_ = () => [];
+    gs.fetchNaverNews_ = () => [];
+    const slack = [];
+    gs.notifySlack_ = (text) => slack.push(text);
+
+    gs.dailyRun();
+    assert.equal(slack.length, 1);
+    assert.match(slack[0], /일시적 오류로 건너뛴 1건은 다음 실행 때 재시도합니다/);
+    assert.match(slack[0], /AI 검증 0건/);
+    assert.equal(sheet.rows[1][7], '');
+  });
+
+  test('실행이 4분 30초를 넘으면 새 행을 시작하지 않고 남은 건수를 돌려준다 (6건 제한은 그대로)', () => {
+    let clock = 1_000_000;
+    const sheet = new FakeSheet([HEADER, ...'ABCDEF'.split('').map((t) => pending(t))]);
+    const { gs, requests } = loadScript({
+      properties: { ANTHROPIC_API_KEY: KEY },
+      responses: Array.from({ length: 6 }, () => answer({ ours: true, verdict: 'approve', reason: '우리 기사' })),
+      now: () => clock,
+    });
+    const fetch = gs.UrlFetchApp.fetch;
+    gs.UrlFetchApp.fetch = (...args) => {
+      clock += 100 * 1000; // 한 행에 100초 — 0·100·200초에 시작한 3건 뒤 300초에서 멈춘다
+      return fetch(...args);
+    };
+    const counts = gs.verifyCore_(sheet);
+    assert.equal(requests.length, 3);
+    assert.deepEqual({ done: counts.done, remaining: counts.remaining, timedOut: counts.timedOut }, { done: 3, remaining: 3, timedOut: true });
+    assert.deepEqual(sheet.rows.slice(1).map((r) => r[7]), ['approve', 'approve', 'approve', '', '', '']);
+
+    // 매일 실행처럼 앞에서 이미 시간을 썼으면(크롤) 그 시간도 센다.
+    const late = gs.verifyCore_(new FakeSheet([HEADER, pending('G')]), clock - 5 * 60 * 1000);
+    assert.equal(requests.length, 3);
+    assert.deepEqual({ remaining: late.remaining, timedOut: late.timedOut }, { remaining: 1, timedOut: true });
   });
 
   test('Apps Script 실행 시간 제한 때문에 한 번에 6건까지만 검증한다', () => {
