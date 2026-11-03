@@ -307,25 +307,34 @@ describe('verifyCore_', () => {
     assert.match(requests[0].payload.messages[0].content, /끝 공백 게시 기사 \| 한국경제/);
   });
 
-  test('모델이 준 주소는 구글 리다이렉트를 http(s) 원문으로 푼 경우만 받고, 그때는 판단 근거에 적는다', () => {
+  test('모델이 준 주소는 리다이렉트·모음 주소를 http(s) 원문으로 푼 경우만 받고, 그때는 새 호스트를 판단 근거 앞에 적는다', () => {
     // 고치기 전에는 스킴·원래 주소를 보지 않고 덮어써, javascript: 나 다른 곳 주소가 원문 주소를 대신했다
-    const naver = row({ status: 'pending', title: 'N', media: '한국경제', date: '2025.03.02', url: 'https://www.hankyung.com/a/1' });
-    const sheet = new FakeSheet([HEADER, pending('G1'), pending('G2'), naver]);
+    const outlet = row({ status: 'pending', title: 'N', media: '한국경제', date: '2025.03.02', url: 'https://www.hankyung.com/a/1' });
+    const aggregator = row({ status: 'pending', title: 'NA', media: '네이버', date: '2025.03.02', url: 'https://n.news.naver.com/mnews/article/1' });
+    const sheet = new FakeSheet([HEADER, pending('G1'), pending('G2'), pending('G3'), pending('G4'), outlet, aggregator]);
+    const longReason = '가'.repeat(1200);
     const { gs } = loadScript({
       properties: { ANTHROPIC_API_KEY: KEY },
       responses: [
         answer({ ours: true, verdict: 'approve', reason: '우리 기사', url: 'javascript:fetch(1)//' }),
-        answer({ ours: true, verdict: 'approve', reason: '우리 기사', url: 'https://real.example/g2?utm_source=x' }),
+        answer({ ours: true, verdict: 'approve', reason: longReason, url: 'https://real.example/g2?utm_source=x' }),
+        answer({ ours: true, verdict: 'approve', reason: '우리 기사', url: 'https://news.google.com/rss/articles/G3?oc=5' }), // 못 풀고 그대로 돌려줌
+        answer({ ours: true, verdict: 'approve', reason: '우리 기사', url: 'https://news.example.com@evil.example/x' }), // @ 로 호스트 숨기기
         answer({ ours: true, verdict: 'approve', reason: '우리 기사', url: 'https://evil.example/phish' }),
+        answer({ ours: true, verdict: 'approve', reason: '우리 기사', url: 'https://www.mk.co.kr/news/1' }),
       ],
     });
     gs.verifyCore_(sheet);
     const byTitle = Object.fromEntries(sheet.rows.slice(1).map((r) => [r[1], r]));
-    assert.equal(byTitle.G1[4], 'https://news.google.com/G1');
-    assert.equal(byTitle.G1[8], '우리 기사');
+    assert.deepEqual([byTitle.G1[4], byTitle.G1[8]], ['https://news.google.com/G1', '우리 기사']);
     assert.equal(byTitle.G2[4], 'https://real.example/g2');
-    assert.equal(byTitle.G2[8], '우리 기사 (링크를 원문 주소로 바꿈)');
-    assert.equal(byTitle.N[4], 'https://www.hankyung.com/a/1');
+    // 긴 근거를 1000자로 잘라도 바뀐 사실과 새 호스트가 남는다
+    assert.ok(byTitle.G2[8].startsWith('링크를 원문 주소(real.example)로 바꿈 — 가'));
+    assert.equal(Array.from(byTitle.G2[8]).length, 1000);
+    assert.deepEqual([byTitle.G3[4], byTitle.G3[8]], ['https://news.google.com/G3', '우리 기사']);
+    assert.equal(byTitle.G4[4], 'https://news.google.com/G4');
+    assert.equal(byTitle.N[4], 'https://www.hankyung.com/a/1'); // 이미 원문인 주소는 바꾸지 않는다
+    assert.equal(byTitle.NA[4], 'https://www.mk.co.kr/news/1'); // 네이버 모음 주소는 원문으로 푼다
   });
 
   test('400 같은 요청 오류가 나면 남은 행을 부르지 않고 바로 멈춘다', () => {

@@ -563,6 +563,10 @@ function verifyCore_(sheet, startedAt) {
 
     let verdict = result.verdict;
     let reason = result.reason || "";
+    // 주소는 리다이렉트·모음 주소를 원문으로 풀어 준 경우만 받고, 바꿨으면 검토자가 보도록 새 호스트를 판단 근거 앞쪽에 적는다
+    // (모델이 쓴 근거 뒤에 붙이면 긴 근거를 1000자로 자를 때 잘린다).
+    const resolvedUrl = resolvedUrl_(data[r][col.url], result.url);
+    if (resolvedUrl) reason = "링크를 원문 주소(" + hostOf_(resolvedUrl) + ")로 바꿈 — " + reason;
     if (result.ours === false && verdict !== "reject") {
       verdict = "reject";
       reason = "우리 회사 기사가 아님 — " + reason;
@@ -590,9 +594,6 @@ function verifyCore_(sheet, startedAt) {
     counts.done++;
 
     // 모델 응답은 웹 페이지를 읽고 만든 글이라 그대로 믿지 않는다: 길이를 자르고, 시트가 수식으로 바꾸지 않게 글자로 쓴다.
-    // 주소는 구글 뉴스 리다이렉트를 원문으로 풀어 준 경우만 받고, 바꿨으면 검토자가 보도록 판단 근거에 적는다.
-    const resolvedUrl = resolvedUrl_(data[r][col.url], result.url);
-    if (resolvedUrl) reason += " (링크를 원문 주소로 바꿈)";
     setCell_(sheet, sheetRow, col.ai_verdict, verdict);
     setCell_(sheet, sheetRow, col.ai_reason, asText_(reason, 1000));
     if (resolvedUrl) setCell_(sheet, sheetRow, col.url, asText_(resolvedUrl));
@@ -851,14 +852,25 @@ function prop_(name) {
   return PropertiesService.getScriptProperties().getProperty(name);
 }
 
-// 모델이 구글 뉴스 리다이렉트(news.google.com)를 풀어 준 원문 주소. 원래 주소가 리다이렉트일 때만, 모델이 준 주소가
-// http(s) 이고 2000자 이하일 때만 받는다. 아니면 "" — 원래 주소를 그대로 둔다. 웹 검색으로 읽은 페이지에 섞인 지시를 따라
-// 모델이 javascript: 나 피싱 주소를 돌려줘도, 이미 원문인 주소(네이버 등)나 홈페이지 링크를 바꾸지 못하게 한다.
+// 원문이 아닌 리다이렉트·모음 주소(구글 뉴스, 네이버 뉴스). 모델이 원문 주소로 풀어 줄 수 있는 원래 주소다.
+const REDIRECT_URL_ = /^https?:\/\/(news\.google\.com|n\.news\.naver\.com|news\.naver\.com)\//i;
+// 링크로 쓸 수 있는 주소: http(s), 호스트는 영숫자·점·하이픈만(@ 로 다른 호스트를 숨기거나 공백·역슬래시를 섞는 수법을 막는다).
+// 홈페이지 스크립트(site/fetch-approved-news.mjs 의 WEB_URL)와 같은 기준이다.
+const WEB_URL_ = /^https?:\/\/[a-z0-9-]+(\.[a-z0-9-]+)*(:\d+)?([/?#][^\s\\]*)?$/i;
+
+// 모델이 리다이렉트·모음 주소를 풀어 준 원문 주소. 원래 주소가 그런 주소일 때만, 모델이 준 주소가 링크로 쓸 수 있고
+// 다시 리다이렉트가 아니며 2000자 이하일 때만 받는다. 아니면 "" — 원래 주소를 그대로 둔다. 웹 검색으로 읽은 페이지에 섞인
+// 지시를 따라 모델이 javascript: 나 피싱 주소를 돌려줘도, 이미 원문인 주소(언론사 사이트)를 바꾸지 못하게 한다.
 // 리다이렉트를 푼 주소에도 추적 파라미터가 붙어 있어 크롤과 같은 기준으로 정리한다(다음 크롤의 중복 검사에 걸리게).
 function resolvedUrl_(original, candidate) {
-  if (!candidate || !/^https?:\/\/news\.google\.com\//i.test(String(original || ""))) return "";
+  if (!candidate || !REDIRECT_URL_.test(String(original || ""))) return "";
   const url = cleanUrl_(String(candidate).trim());
-  return /^https?:\/\/[^\s/]+/i.test(url) && url.length <= 2000 ? url : "";
+  return WEB_URL_.test(url) && !REDIRECT_URL_.test(url) && url.length <= 2000 ? url : "";
+}
+
+function hostOf_(url) {
+  const m = /^https?:\/\/([^/:?#]+)/i.exec(String(url));
+  return m ? m[1] : "";
 }
 
 // 밖에서 온 글자(크롤한 제목·언론사·주소, 모델 응답)를 시트에 글자 그대로 쓴다. 시트는 써 넣은 값을 사람이 입력한 것처럼

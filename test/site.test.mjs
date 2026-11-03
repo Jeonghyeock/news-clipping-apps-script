@@ -42,11 +42,16 @@ describe('fetch-approved-news', () => {
     const items = toNewsItems(
       [
         { status: 'approved', title: '스크립트 링크', url: 'javascript:fetch(1)//', date: '2025.03.01' },
+        { status: 'approved', title: '호스트 숨기기', url: 'https://news.example.com@evil.example/x', date: '2025.03.01' },
         { status: 'approved', title: '정상', url: ' https://a/1 ', date: '2025.03.02', image: 'javascript:alert(1)' },
+        { status: 'approved', title: '사이트 안 이미지', url: 'https://a/2', date: '2025.03.03', image: '/images/press/1.png' },
       ],
       { fallbackImage: '/logo.png' },
     );
-    assert.deepEqual(items.map((i) => [i.title, i.url, i.image]), [['정상', 'https://a/1', '/logo.png']]);
+    assert.deepEqual(items.map((i) => [i.title, i.url, i.image]), [
+      ['사이트 안 이미지', 'https://a/2', '/images/press/1.png'], // 사람이 넣은 사이트 안 경로는 그대로
+      ['정상', 'https://a/1', '/logo.png'],
+    ]);
   });
 
   test('날짜가 "2025. 3. 2" 처럼 읽혀도 YYYY.MM.DD 로 맞춘 뒤 최신순으로 정렬한다', () => {

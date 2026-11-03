@@ -35,21 +35,35 @@ export function toObjects(values) {
   return rows.map((row) => Object.fromEntries(keys.map((key, i) => [key, row[i] ?? ''])));
 }
 
-// 홈페이지 링크·이미지로 쓸 수 있는 주소만(http·https). javascript: 같은 주소가 시트에 들어가도 내보내지 않는다.
-const webUrl = (value) => (/^https?:\/\//i.test(String(value ?? '').trim()) ? String(value).trim() : '');
+// 홈페이지 링크로 쓸 수 있는 주소: http(s), 호스트는 영숫자·점·하이픈만(@ 로 다른 호스트를 숨기거나 공백·역슬래시를 섞는
+// 수법을 막는다). javascript: 같은 주소가 시트에 들어가도 내보내지 않는다. Apps Script 의 WEB_URL_ 과 같은 기준이다.
+const WEB_URL = /^https?:\/\/[a-z0-9-]+(\.[a-z0-9-]+)*(:\d+)?([/?#][^\s\\]*)?$/i;
+const webUrl = (value) => {
+  const s = String(value ?? '').trim();
+  return WEB_URL.test(s) ? s : '';
+};
+// 이미지는 사람이 직접 넣는 칸이라 사이트 안 경로(/images/a.png)도 받는다(// 로 시작하는 다른 사이트 주소는 아니다).
+const imageUrl = (value) => {
+  const s = String(value ?? '').trim();
+  return webUrl(s) || (/^\/(?!\/)[^\s\\]*$/.test(s) ? s : '');
+};
 
 // 사람이 approved 로 바꾼 행만 내보낸다. AI 판단(ai_verdict)은 참고용이라 여기서 보지 않는다.
 export function toNewsItems(rows, { fallbackImage } = {}) {
   return rows
     .filter((r) => String(r.status ?? '').trim().toLowerCase() === 'approved')
-    .map((r) => ({
-      title: r.title,
-      media: r.media,
-      date: normalizeDate(r.date),
-      url: webUrl(r.url),
-      image: webUrl(r.image) || fallbackImage || undefined,
-      description: r.description || undefined,
-    }))
+    .map((r) => {
+      const url = webUrl(r.url);
+      if (r.title && String(r.url ?? '').trim() && !url) console.warn(`[news] 링크가 http(s) 주소가 아니라 뺀 기사: ${r.title}`);
+      return {
+        title: r.title,
+        media: r.media,
+        date: normalizeDate(r.date),
+        url,
+        image: imageUrl(r.image) || fallbackImage || undefined,
+        description: r.description || undefined,
+      };
+    })
     .filter((item) => item.title && item.url)
     .sort((a, b) => String(b.date ?? '').localeCompare(String(a.date ?? '')));
 }
