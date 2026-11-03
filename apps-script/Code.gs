@@ -590,11 +590,12 @@ function verifyCore_(sheet, startedAt) {
     counts.done++;
 
     // 모델 응답은 웹 페이지를 읽고 만든 글이라 그대로 믿지 않는다: 길이를 자르고, 시트가 수식으로 바꾸지 않게 글자로 쓴다.
+    // 주소는 구글 뉴스 리다이렉트를 원문으로 풀어 준 경우만 받고, 바꿨으면 검토자가 보도록 판단 근거에 적는다.
+    const resolvedUrl = resolvedUrl_(data[r][col.url], result.url);
+    if (resolvedUrl) reason += " (링크를 원문 주소로 바꿈)";
     setCell_(sheet, sheetRow, col.ai_verdict, verdict);
     setCell_(sheet, sheetRow, col.ai_reason, asText_(reason, 1000));
-    // 모델이 리다이렉트를 풀어 준 URL 에도 추적 파라미터가 붙어 있다.
-    // 크롤과 같은 기준으로 정리해 둬야 다음 크롤에서 중복 검사에 걸린다.
-    if (result.url) setCell_(sheet, sheetRow, col.url, asText_(cleanUrl_(String(result.url))));
+    if (resolvedUrl) setCell_(sheet, sheetRow, col.url, asText_(resolvedUrl));
     if (result.media && untouched("media")) setCell_(sheet, sheetRow, col.media, asText_(result.media, 100));
     // status(게시 여부)는 사람이 정하는 칸이라 코드가 쓰지 않는다.
     // 판단 근거는 ai_verdict / ai_reason 에만 남긴다.
@@ -848,6 +849,16 @@ function needsVerify_(values, col) {
 
 function prop_(name) {
   return PropertiesService.getScriptProperties().getProperty(name);
+}
+
+// 모델이 구글 뉴스 리다이렉트(news.google.com)를 풀어 준 원문 주소. 원래 주소가 리다이렉트일 때만, 모델이 준 주소가
+// http(s) 이고 2000자 이하일 때만 받는다. 아니면 "" — 원래 주소를 그대로 둔다. 웹 검색으로 읽은 페이지에 섞인 지시를 따라
+// 모델이 javascript: 나 피싱 주소를 돌려줘도, 이미 원문인 주소(네이버 등)나 홈페이지 링크를 바꾸지 못하게 한다.
+// 리다이렉트를 푼 주소에도 추적 파라미터가 붙어 있어 크롤과 같은 기준으로 정리한다(다음 크롤의 중복 검사에 걸리게).
+function resolvedUrl_(original, candidate) {
+  if (!candidate || !/^https?:\/\/news\.google\.com\//i.test(String(original || ""))) return "";
+  const url = cleanUrl_(String(candidate).trim());
+  return /^https?:\/\/[^\s/]+/i.test(url) && url.length <= 2000 ? url : "";
 }
 
 // 밖에서 온 글자(크롤한 제목·언론사·주소, 모델 응답)를 시트에 글자 그대로 쓴다. 시트는 써 넣은 값을 사람이 입력한 것처럼
