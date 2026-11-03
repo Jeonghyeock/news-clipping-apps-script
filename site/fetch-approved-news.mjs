@@ -35,6 +35,9 @@ export function toObjects(values) {
   return rows.map((row) => Object.fromEntries(keys.map((key, i) => [key, row[i] ?? ''])));
 }
 
+// 홈페이지 링크·이미지로 쓸 수 있는 주소만(http·https). javascript: 같은 주소가 시트에 들어가도 내보내지 않는다.
+const webUrl = (value) => (/^https?:\/\//i.test(String(value ?? '').trim()) ? String(value).trim() : '');
+
 // 사람이 approved 로 바꾼 행만 내보낸다. AI 판단(ai_verdict)은 참고용이라 여기서 보지 않는다.
 export function toNewsItems(rows, { fallbackImage } = {}) {
   return rows
@@ -43,8 +46,8 @@ export function toNewsItems(rows, { fallbackImage } = {}) {
       title: r.title,
       media: r.media,
       date: normalizeDate(r.date),
-      url: r.url,
-      image: r.image || fallbackImage || undefined,
+      url: webUrl(r.url),
+      image: webUrl(r.image) || fallbackImage || undefined,
       description: r.description || undefined,
     }))
     .filter((item) => item.title && item.url)

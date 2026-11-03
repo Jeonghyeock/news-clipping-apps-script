@@ -37,6 +37,18 @@ describe('fetch-approved-news', () => {
     assert.equal(items[1].description, undefined);
   });
 
+  test('링크·이미지가 http(s) 주소가 아니면 내보내지 않는다 (javascript: 등)', () => {
+    // 고치기 전에는 url 이 비어 있지 않은지만 봐서 javascript: 링크가 홈페이지로 나갔다
+    const items = toNewsItems(
+      [
+        { status: 'approved', title: '스크립트 링크', url: 'javascript:fetch(1)//', date: '2025.03.01' },
+        { status: 'approved', title: '정상', url: ' https://a/1 ', date: '2025.03.02', image: 'javascript:alert(1)' },
+      ],
+      { fallbackImage: '/logo.png' },
+    );
+    assert.deepEqual(items.map((i) => [i.title, i.url, i.image]), [['정상', 'https://a/1', '/logo.png']]);
+  });
+
   test('날짜가 "2025. 3. 2" 처럼 읽혀도 YYYY.MM.DD 로 맞춘 뒤 최신순으로 정렬한다', () => {
     assert.equal(normalizeDate('2025. 3. 2'), '2025.03.02');
     assert.equal(normalizeDate('2025. 3. 2.'), '2025.03.02');
