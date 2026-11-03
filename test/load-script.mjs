@@ -45,6 +45,15 @@ export function loadScript({ properties = {}, responses = [], now } = {}) {
   return { gs: context, requests, lock };
 }
 
+// 실제 시트처럼 써 넣은 글자를 해석한다(setValue·setValues 는 사람이 입력한 것처럼 다룬다).
+// 맨 앞 ' 는 '글자로 두기' 표시라 저장되지 않고, = + - 로 시작하면 수식이 된다 — 수식은 { formula } 로 남겨 테스트가 알아보게 한다.
+const typed = (value) => {
+  if (typeof value !== 'string') return value;
+  if (value.startsWith("'")) return value.slice(1);
+  if (/^[=+-]/.test(value)) return { formula: value };
+  return value;
+};
+
 // getDataRange / getRange / sort 만 흉내 내는 가짜 시트. rows[0] 이 열 이름 행이다.
 // setNumberFormat 은 값을 바꾸지 않고, 어느 범위에 어떤 서식을 걸었는지만 numberFormats 에 남긴다.
 export class FakeSheet {
@@ -68,11 +77,11 @@ export class FakeSheet {
       setValues(values) {
         values.forEach((v, i) => {
           sheet.rows[row - 1 + i] = sheet.rows[row - 1 + i] ?? new Array(sheet.getLastColumn()).fill('');
-          v.forEach((cell, j) => (sheet.rows[row - 1 + i][col - 1 + j] = cell));
+          v.forEach((cell, j) => (sheet.rows[row - 1 + i][col - 1 + j] = typed(cell)));
         });
       },
       setValue(value) {
-        sheet.rows[row - 1][col - 1] = value;
+        sheet.rows[row - 1][col - 1] = typed(value);
       },
       setNumberFormat(format) {
         sheet.numberFormats.push({ row, col, numRows, numCols, format });
