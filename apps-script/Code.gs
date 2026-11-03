@@ -584,11 +584,11 @@ function verifyCore_(sheet, startedAt) {
 
     // 모델 응답은 웹 페이지를 읽고 만든 글이라 그대로 믿지 않는다: 길이를 자르고, 시트가 수식으로 바꾸지 않게 글자로 쓴다.
     setCell_(sheet, sheetRow, col.ai_verdict, verdict);
-    setCell_(sheet, sheetRow, col.ai_reason, asText_(String(reason).slice(0, 1000)));
+    setCell_(sheet, sheetRow, col.ai_reason, asText_(reason, 1000));
     // 모델이 리다이렉트를 풀어 준 URL 에도 추적 파라미터가 붙어 있다.
     // 크롤과 같은 기준으로 정리해 둬야 다음 크롤에서 중복 검사에 걸린다.
-    if (result.url) setCell_(sheet, sheetRow, col.url, asText_(cleanUrl_(String(result.url).slice(0, 2000))));
-    if (result.media) setCell_(sheet, sheetRow, col.media, asText_(String(result.media).slice(0, 100)));
+    if (result.url) setCell_(sheet, sheetRow, col.url, asText_(cleanUrl_(String(result.url))));
+    if (result.media) setCell_(sheet, sheetRow, col.media, asText_(result.media, 100));
     // status(게시 여부)는 사람이 정하는 칸이라 코드가 쓰지 않는다.
     // 판단 근거는 ai_verdict / ai_reason 에만 남긴다.
   }
@@ -825,12 +825,14 @@ function prop_(name) {
 }
 
 // 밖에서 온 글자(크롤한 제목·언론사·주소, 모델 응답)를 시트에 글자 그대로 쓴다. 시트는 써 넣은 값을 사람이 입력한 것처럼
-// 해석해, 맨 앞 ' 는 '글자로 두기' 표시로 먹고(제목의 따옴표가 사라짐) = + - @ 로 시작하면 수식으로 바꾼다(수식 주입 —
-// 모델이 읽은 페이지에 섞인 지시로 =IMPORTXML(...) 같은 값을 돌려주면 시트 내용을 밖으로 보낼 수 있다).
-// 이런 글자 앞에 ' 를 하나 더 붙이면 그 표시만 먹히고 나머지가 원문 그대로 글자로 남는다.
-function asText_(value) {
-  const s = String(value ?? "");
-  return /^['=+\-@]/.test(s) ? "'" + s : s;
+// 해석해, 맨 앞 ' 는 '글자로 두기' 표시로 먹고(제목의 따옴표가 사라짐), = + - @ 로 시작하면 수식으로(수식 주입 — 모델이 읽은
+// 페이지에 섞인 지시로 =IMPORTXML(...) 같은 값을 돌려주면 시트 내용을 밖으로 보낼 수 있다), 숫자·날짜·TRUE 처럼 보이면 그 값으로
+// 바꾼다. 맨 앞에 ' 를 붙이면 그 표시만 먹히고 나머지가 원문 그대로 글자로 남으므로, 밖에서 온 글자에는 늘 붙인다.
+// max 를 주면 그 글자 수로 자른다(코드 포인트 단위 — 이모지 같은 글자를 반으로 자르지 않게).
+function asText_(value, max) {
+  let s = String(value ?? "");
+  if (max !== undefined) s = Array.from(s).slice(0, max).join("");
+  return s ? "'" + s : s;
 }
 
 function setCell_(sheet, rowNum, colIndex, value) {

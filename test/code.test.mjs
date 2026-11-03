@@ -52,6 +52,16 @@ describe('후보 정리 도우미', () => {
     assert.equal(gs.isRecentEnough_(''), true);
   });
 
+  test("밖에서 온 글자는 늘 맨 앞에 ' 를 붙여, 시트가 숫자·날짜·참거짓·수식으로 바꾸지 않게 한다", () => {
+    for (const s of ['2025.06.01', '10%', 'TRUE', '007', '@IMPORTXML(1)', '\t=HYPERLINK("x")', "'샘플원'", '보통 제목']) {
+      assert.equal(gs.asText_(s), "'" + s);
+    }
+    assert.equal(gs.asText_(''), '');
+    assert.equal(gs.asText_(null), '');
+    // 코드 포인트 단위로 잘라 이모지를 반으로 자르지 않는다
+    assert.equal(gs.asText_('가😀나', 2), "'가😀");
+  });
+
   test('구글 뉴스 제목 끝의 " - 언론사"를 떼고, 네이버 링크는 호스트로 언론사를 정한다', () => {
     assert.equal(gs.cleanTitle_('샘플테크 투자 유치 - 조선비즈', '조선비즈'), '샘플테크 투자 유치');
     assert.equal(gs.mediaFromUrl_('https://www.hankyung.com/article/1'), '한국경제');
