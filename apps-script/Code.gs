@@ -504,7 +504,7 @@ function verifyCore_(sheet, startedAt) {
   // clear its ai_verdict cell.
   const pending = [];
   for (let r = 1; r < data.length; r++) {
-    const isPending = String(data[r][col.status] || "").toLowerCase() === "pending";
+    const isPending = String(data[r][col.status] || "").trim().toLowerCase() === "pending";
     const notVerified = !String(data[r][col.ai_verdict] || "").trim();
     if (isPending && notVerified) pending.push(r);
   }
@@ -514,7 +514,7 @@ function verifyCore_(sheet, startedAt) {
   // so the AI can catch the same story crawled under a slightly different title.
   const published = [];
   for (let r = 1; r < data.length; r++) {
-    if (String(data[r][col.status] || "").toLowerCase() === "approved") {
+    if (String(data[r][col.status] || "").trim().toLowerCase() === "approved") {
       published.push({
         title: data[r][col.title],
         media: data[r][col.media],
@@ -821,7 +821,7 @@ function countPending_(sheet) {
   const col = headerIndex_(data[0]);
   let n = 0;
   for (let r = 1; r < data.length; r++) {
-    if (String(data[r][col.status] || "").toLowerCase() === "pending") n++;
+    if (String(data[r][col.status] || "").trim().toLowerCase() === "pending") n++;
   }
   return n;
 }

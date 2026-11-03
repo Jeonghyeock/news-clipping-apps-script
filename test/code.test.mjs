@@ -294,6 +294,19 @@ describe('verifyCore_', () => {
     assert.equal(a[8].length, 1000);
   });
 
+  test('status 앞뒤 공백은 홈페이지와 같이 무시한다 ("approved " 는 게시 목록에, "pending " 은 검증·대기 건수에 든다)', () => {
+    // 고치기 전에는 홈페이지(toNewsItems)만 trim 해서, 끝 공백이 붙은 승인 행은 게시되면서도 AI 중복 검사 목록에서 빠졌다
+    const sheet = new FakeSheet([
+      HEADER,
+      row({ status: 'pending ', title: 'A', media: '언론사', date: '2025.03.02', url: 'https://news.google.com/A' }),
+      row({ status: 'approved ', title: '끝 공백 게시 기사', media: '한국경제', date: '2024.12.01' }),
+    ]);
+    const { gs, requests } = loadScript({ properties: { ANTHROPIC_API_KEY: KEY }, responses: [answer({ ours: true, verdict: 'approve', reason: '우리 기사' })] });
+    assert.equal(gs.countPending_(sheet), 1);
+    assert.equal(gs.verifyCore_(sheet).done, 1);
+    assert.match(requests[0].payload.messages[0].content, /끝 공백 게시 기사 \| 한국경제/);
+  });
+
   test('400 같은 요청 오류가 나면 남은 행을 부르지 않고 바로 멈춘다', () => {
     const sheet = new FakeSheet([HEADER, pending('A'), pending('B')]);
     const { gs, requests } = loadScript({
