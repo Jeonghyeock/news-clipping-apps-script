@@ -452,10 +452,11 @@ function verifyPending() {
     return;
   }
   if (counts.done === 0) {
+    const decided = decidedNote_(counts);
     ui.alert(
-      counts.skipped || counts.deferred || counts.moved || counts.decided
-        ? "검증에 성공한 항목이 없습니다. " + verifyIssueNote_(counts)
-        : "검증할 새 항목이 없습니다 (pending 중 미검증 건이 없음)."
+      counts.skipped || counts.deferred || counts.moved
+        ? "검증에 성공한 항목이 없습니다. " + [verifyIssueNote_(counts), decided].filter(Boolean).join(" / ")
+        : "검증할 새 항목이 없습니다 (pending 중 미검증 건이 없음)." + (decided ? " " + decided : "")
     );
     return;
   }
@@ -478,7 +479,8 @@ function verifyPending() {
         "건은 다시 실행해주세요."
       : "");
   const issue = verifyIssueNote_(counts);
-  const full = summary + (issue ? " ⚠ " + issue : "");
+  const decided = decidedNote_(counts);
+  const full = summary + (issue ? " ⚠ " + issue : "") + (decided ? " " + decided : "");
   notifySlack_(":mag: 뉴스 " + full + confirmCta_(countPending_(firstSheet_())));
   ui.alert(full);
 }
@@ -504,9 +506,7 @@ function verifyCore_(sheet, startedAt) {
   // clear its ai_verdict cell.
   const pending = [];
   for (let r = 1; r < data.length; r++) {
-    const isPending = String(data[r][col.status] || "").trim().toLowerCase() === "pending";
-    const notVerified = !String(data[r][col.ai_verdict] || "").trim();
-    if (isPending && notVerified) pending.push(r);
+    if (needsVerify_(data[r], col)) pending.push(r);
   }
   const rows = pending.slice(0, MAX_VERIFY_PER_RUN);
 
@@ -514,7 +514,7 @@ function verifyCore_(sheet, startedAt) {
   // so the AI can catch the same story crawled under a slightly different title.
   const published = [];
   for (let r = 1; r < data.length; r++) {
-    if (String(data[r][col.status] || "").trim().toLowerCase() === "approved") {
+    if (statusOf_(data[r], col) === "approved") {
       published.push({
         title: data[r][col.title],
         media: data[r][col.media],
@@ -574,15 +574,18 @@ function verifyCore_(sheet, startedAt) {
 
     // 검증하는 사이 행이 옮겨졌을 수 있다(사람이 위쪽 행을 지우거나 넣거나 정렬함).
     // 처음 읽은 행 번호에 그대로 쓰면 다른 기사에 결과가 붙으므로, 쓰기 직전에 다시 찾는다.
-    const sheetRow = currentRow_(sheet, col, data[r], r + 1);
-    if (sheetRow === -1) {
+    const current = currentRow_(sheet, col, data[r], r + 1);
+    if (current.row === -1) {
       counts.decided++;
       continue;
     }
-    if (!sheetRow) {
+    if (!current.row) {
       counts.moved++;
       continue;
     }
+    const sheetRow = current.row;
+    // 검증하는 사이 사람이 고친 칸은 모델 값으로 덮어쓰지 않는다(아직 pending 이어도)
+    const untouched = (name) => String(current.values[col[name]]) === String(data[r][col[name]]);
     counts[verdict] = (counts[verdict] || 0) + 1;
     counts.done++;
 
@@ -592,7 +595,7 @@ function verifyCore_(sheet, startedAt) {
     // 모델이 리다이렉트를 풀어 준 URL 에도 추적 파라미터가 붙어 있다.
     // 크롤과 같은 기준으로 정리해 둬야 다음 크롤에서 중복 검사에 걸린다.
     if (result.url) setCell_(sheet, sheetRow, col.url, asText_(cleanUrl_(String(result.url))));
-    if (result.media) setCell_(sheet, sheetRow, col.media, asText_(result.media, 100));
+    if (result.media && untouched("media")) setCell_(sheet, sheetRow, col.media, asText_(result.media, 100));
     // status(게시 여부)는 사람이 정하는 칸이라 코드가 쓰지 않는다.
     // 판단 근거는 ai_verdict / ai_reason 에만 남긴다.
   }
@@ -614,9 +617,15 @@ function verifyIssueNote_(counts) {
     parts.push(
       "검증하는 사이 행이 옮겨지거나 지워져 결과를 쓰지 않은 " + counts.moved + "건은 (행이 남아 있으면) 다음 실행 때 재시도합니다"
     );
-  if (counts.decided)
-    parts.push("검증하는 사이 사람이 확정했거나 다른 실행이 먼저 결과를 쓴 " + counts.decided + "건은 결과를 쓰지 않았습니다");
   return parts.join(" / ");
+}
+
+// 검증하는 사이 사람이 먼저 확정한 행 안내. 문제가 아니라 정상적인 결과라 verifyIssueNote_(경고)에는 넣지 않는다.
+// (다른 스크립트 실행은 잠금 때문에 끼어들 수 없으므로, 결과 칸을 채운 것도 사람이다.)
+function decidedNote_(counts) {
+  return counts.decided
+    ? "검증하는 사이 사람이 확정했거나 결과 칸을 채운 " + counts.decided + "건은 결과를 쓰지 않았습니다"
+    : "";
 }
 
 // web_search / web_fetch 를 쓰는 턴은 도구가 다 돌기 전에 pause_turn 으로 끊겨
@@ -821,9 +830,20 @@ function countPending_(sheet) {
   const col = headerIndex_(data[0]);
   let n = 0;
   for (let r = 1; r < data.length; r++) {
-    if (String(data[r][col.status] || "").trim().toLowerCase() === "pending") n++;
+    if (statusOf_(data[r], col) === "pending") n++;
   }
   return n;
+}
+
+// status 칸 값(앞뒤 공백·대소문자 무시). 홈페이지 스크립트(toNewsItems)와 같은 기준이다.
+function statusOf_(values, col) {
+  return String(values[col.status] || "").trim().toLowerCase();
+}
+
+// AI 검증을 할 행: 사람이 아직 확정하지 않았고(pending) 검증 결과(ai_verdict)도 없는 행.
+// 검증 대상을 고를 때와 결과를 쓰기 직전(currentRow_)에 같은 기준을 쓴다.
+function needsVerify_(values, col) {
+  return statusOf_(values, col) === "pending" && !String(values[col.ai_verdict] || "").trim();
 }
 
 function prop_(name) {
@@ -849,8 +869,8 @@ function setCell_(sheet, rowNum, colIndex, value) {
 // 처음 읽은 행(before)이 지금 몇 번째 행인지 찾는다. 원래 자리(expected)에 url·title 이 같은 행이
 // 그대로 있으면 그 번호를, 옮겨졌으면 url 과 title 이 모두 같은 행을 찾아 그 번호를 돌려준다.
 // url 만 보면, 앞선 검증이 리다이렉트를 풀어 같은 원문 주소가 된 다른 행(예: 같은 기사의 구글 행)에 쓸 수 있었다.
-// 못 찾거나(지워짐) 여러 개면 0 — 엉뚱한 행에 쓰느니 쓰지 않고 다음 실행에 맡긴다.
-// 찾은 행을 그 사이 사람이 확정했거나(status 가 pending 이 아님) 다른 실행이 먼저 결과를 썼으면(ai_verdict) -1 — 쓰지 않는다.
+// 찾으면 { row, values }(values 는 지금 그 행의 값). 못 찾거나(지워짐) 여러 개면 { row: 0 } — 엉뚱한 행에 쓰느니 쓰지 않고
+// 다음 실행에 맡긴다. 찾은 행을 그 사이 사람이 확정했거나(status 가 pending 이 아님) 결과 칸을 채웠으면 { row: -1 } — 쓰지 않는다.
 // 잠금(LockService)은 스크립트 실행끼리만 막고 사람의 편집은 막지 않으므로, 쓰기 직전에 다시 본다.
 function currentRow_(sheet, col, before, expected) {
   const data = sheet.getDataRange().getValues();
@@ -867,11 +887,9 @@ function currentRow_(sheet, col, before, expected) {
     }
     if (matches.length === 1) found = matches[0];
   }
-  if (!found) return 0;
+  if (!found) return { row: 0 };
   const values = data[found - 1];
-  const stillPending = String(values[col.status] || "").trim().toLowerCase() === "pending";
-  const notVerified = !String(values[col.ai_verdict] || "").trim();
-  return stillPending && notVerified ? found : -1;
+  return needsVerify_(values, col) ? { row: found, values } : { row: -1 };
 }
 
 // " 시트에서 확정해주세요: <시트 주소>" — empty string when nothing is pending.

@@ -452,7 +452,23 @@ describe('verifyCore_', () => {
     assert.deepEqual({ done: counts.done, decided: counts.decided, remaining: counts.remaining }, { done: 0, decided: 1, remaining: 0 });
     const [, p1] = sheet.rows;
     assert.deepEqual([p1[0], p1[2], p1[4], p1[7]], ['approved', '사람이 고친 언론사', 'https://news.google.com/P1', '']);
-    assert.match(gs.verifyIssueNote_(counts), /사람이 확정했거나 다른 실행이 먼저 결과를 쓴 1건/);
+    // 사람이 먼저 확정한 것은 문제가 아니므로 경고(verifyIssueNote_)에는 넣지 않고 안내만 한다
+    assert.equal(gs.verifyIssueNote_(counts), '');
+    assert.match(gs.decidedNote_(counts), /사람이 확정했거나 결과 칸을 채운 1건/);
+  });
+
+  test('검증하는 사이 사람이 pending 인 채로 언론사를 고치면, 판정은 쓰되 고친 언론사는 덮어쓰지 않는다', () => {
+    const sheet = new FakeSheet([HEADER, pending('P1')]);
+    const { gs } = loadScript({ properties: { ANTHROPIC_API_KEY: KEY }, responses: [found] });
+    const fetch = gs.UrlFetchApp.fetch;
+    gs.UrlFetchApp.fetch = (...args) => {
+      sheet.rows[1][2] = '사람이 고친 언론사';
+      return fetch(...args);
+    };
+
+    assert.equal(gs.verifyCore_(sheet).done, 1);
+    const [, p1] = sheet.rows;
+    assert.deepEqual([p1[0], p1[2], p1[7]], ['pending', '사람이 고친 언론사', 'approve']);
   });
 
   test('검증하는 사이 행이 지워졌을 때 url 만 같은 다른 기사(이미 게시된 행)에 쓰지 않는다', () => {
