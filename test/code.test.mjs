@@ -424,6 +424,44 @@ describe('verifyCore_', () => {
     assert.deepEqual(other, approved);
   });
 
+  test('검증하는 사이 사람이 그 행을 확정하면 모델이 준 주소·언론사로 덮어쓰지 않는다', () => {
+    // 고치기 전에는 url·title 만 비교해, 사람이 approved 로 바꾸고 언론사를 고친 행에도 모델 값을 썼다
+    const sheet = new FakeSheet([HEADER, pending('P1')]);
+    const { gs } = loadScript({ properties: { ANTHROPIC_API_KEY: KEY }, responses: [found] });
+    const fetch = gs.UrlFetchApp.fetch;
+    gs.UrlFetchApp.fetch = (...args) => {
+      sheet.rows[1][0] = 'approved';
+      sheet.rows[1][2] = '사람이 고친 언론사';
+      return fetch(...args);
+    };
+
+    const counts = gs.verifyCore_(sheet);
+    assert.deepEqual({ done: counts.done, decided: counts.decided, remaining: counts.remaining }, { done: 0, decided: 1, remaining: 0 });
+    const [, p1] = sheet.rows;
+    assert.deepEqual([p1[0], p1[2], p1[4], p1[7]], ['approved', '사람이 고친 언론사', 'https://news.google.com/P1', '']);
+    assert.match(gs.verifyIssueNote_(counts), /사람이 확정했거나 다른 실행이 먼저 결과를 쓴 1건/);
+  });
+
+  test('검증하는 사이 행이 지워졌을 때 url 만 같은 다른 기사(이미 게시된 행)에 쓰지 않는다', () => {
+    // 같은 기사가 구글 행(앞선 검증이 url 을 원문 X 로 바꿈, 게시됨)과 네이버 행(url X, 다른 제목)으로 들어온 상황.
+    // 고치기 전에는 네이버 행이 지워지면 url 로 다시 찾아 게시된 구글 행에 판정을 썼다
+    const google = row({ status: 'approved', title: '샘플테크 투자 유치 - 구글 제목', media: '조선비즈', date: '2025.03.02', url: 'https://real.example/x', ai_verdict: 'approve', ai_reason: '우리 기사' });
+    const sheet = new FakeSheet([
+      HEADER,
+      row({ status: 'pending', title: '샘플테크 투자 유치 네이버 제목', media: '조선비즈', date: '2025.03.02', url: 'https://real.example/x' }),
+      google,
+    ]);
+    const { gs } = loadScript({
+      properties: { ANTHROPIC_API_KEY: KEY },
+      responses: [answer({ ours: true, verdict: 'approve', reason: '같은 기사', duplicate: true, url: 'https://real.example/x', media: '조선비즈' })],
+    });
+    deleteRowDuringFetch(gs, sheet, 1);
+
+    const counts = gs.verifyCore_(sheet);
+    assert.equal(counts.done, 0);
+    assert.deepEqual(sheet.rows, [HEADER, google]);
+  });
+
   test('검증하는 사이 그 기사 행이 지워졌으면 아무 데도 쓰지 않고 건너뛴 것으로 센다', () => {
     const approved = row({ status: 'approved', title: '게시된 기사', media: '한국경제', date: '2025.03.01', url: 'https://real.example/approved', ai_verdict: 'approve' });
     const sheet = new FakeSheet([HEADER, pending('P1'), approved]);
